@@ -1,7 +1,10 @@
 ---
 title: "Trusting iNat Observations"
 author: "BioCuration Lab"
-format: html
+format: 
+  html:
+    embed-resources: true
+    theme: cosmo
 ---
 
 ```{r}
@@ -654,7 +657,7 @@ p_batlow + p_batlow_reversed + p_my_palette &
 #| echo: false
 #| message: false
 if(!require("grateful")) install.packages("grateful"); library(grateful)
-scan_packages("Trusting_iNat_Observations.qmd", cite.tidyverse = FALSE) |>
+scan_packages("inat_trusting-observations.qmd", cite.tidyverse = FALSE) |>
   gt() |>
   tab_style(
     style = cell_text(weight = "bold"),
