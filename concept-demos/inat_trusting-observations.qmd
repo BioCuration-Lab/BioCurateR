@@ -2,12 +2,9 @@
 title: "Trusting iNat Observations"
 author: "BioCuration Lab"
 format: 
-  gfm:
-    df-print: kable
-    toc: true
-    fig-width: 7
-    fig-height: 5
-    html-math-method: webtex
+  html:
+    theme: cosmo
+    embed-resources: true
 ---
 
 ```{r}
