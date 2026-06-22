@@ -2,9 +2,9 @@
 title: "Trusting iNat Observations"
 author: "BioCuration Lab"
 format: 
-  html:
-    embed-resources: true
-    theme: cosmo
+  gfm:
+    toc: true
+    html-math-method: webtex
 ---
 
 ```{r}
