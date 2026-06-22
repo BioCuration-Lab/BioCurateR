@@ -1,0 +1,667 @@
+---
+title: "Trusting iNat Observations"
+author: "BioCuration Lab"
+format: 
+  html:
+    theme: cosmo
+    embed-resources: true
+---
+
+```{r}
+#| warning: false
+if (!require("pacman")) install.packages("pacman"); library(pacman)
+p_load(rinat, dplyr, stringr, tibble, ggplot2, sf, maps, patchwork, scico, gt, 
+       httr2, purrr,
+       tidyr,
+       install = TRUE, update = FALSE)
+```
+
+The R package [`{rinat}`](https://github.com/ropensci/rinat) was made for interacting directly with the [iNaturalist API](https://api.inaturalist.org/v1/docs/). 
+
+:::{.callout-tip}
+If you run into any limitations, you could likely make a custom solution to the iNat API using {httr2}(https://httr2.r-lib.org).
+:::
+
+A useful vignette to get started...
+```{r}
+#| eval: false
+vignette("rinat-intro", package = "rinat")
+```
+
+The quickest way is to search with `get_inat_obs()`.
+
+You can refine the search using parameters.
+ - `place_id`
+ - `quality`
+ - `taxon_name` - searches for it and all its descendants
+ 
+ I'm not sure if there's a better way to do it, but I know that the iNat website has additive URLs. If I go to the normal *Explore* page, type in `Alabama`, hit search, and check the resulting URL... it looks like this: [https://www.inaturalist.org/observations?place_id=19](https://www.inaturalist.org/observations?place_id=19). Thus, I assume that the place_id for Alabama is 19.
+
+```{r}
+#| eval: true
+#| output: false
+obs <- get_inat_obs(
+  taxon_name = "Orconectes australis",
+  place_id = 19,
+  quality = "research" # Only return research-grade observations
+)
+```
+
+The `obs` object returns a ton of information...
+
+```{r}
+names(obs)
+```
+
+This information includes user attributes. If you have a list of people you trust to make the IDs, you can easily limit the `obs` object by any of these user attributes.
+
+```{r}
+obs %>%
+  select(contains("user")) %>%
+  names()
+```
+
+I'd recommend using either `user_login` or `user_name`. `user_id` may be a safer choice in the long run because it'll never change, but you'd need to pull it from iNat --- that could be really annoying!
+
+## Establishing Your "Trusted" Users
+
+Let's say you have a list of "trusted" users stored in a spreadsheet. For this example, I'm going to use the iNat IDs from these people providing their `user_login`...
+
+1.  Import the trusted users
+
+    ```{r}
+    # trusted_users <- read.csv(...)
+    
+    trusted_users <- tibble(
+      # Directly corresponds to iNaturalist field
+      user_login = c("hydrophilus", "niemillernature", "kingjenna"),
+      
+      # Does NOT correspond to iNaturalist field
+      name = c("Eric Maxwell", "Matt Niemiller", "Jenna King"),
+      
+      # Does NOT correspond to iNaturalist field
+      affiliation = c(NA, "University of Alabama, Huntsville", "USFWS")
+    )
+    ```
+
+    ```{r}
+    trusted_users
+    ```
+
+2.  **Filter the rows in `obs` that match the `user_login` from the `trusted_users` data.frame.**
+
+    ```{r}
+    #| label: create-filtered-obs
+    filtered_obs <- obs %>%
+      filter(user_login %in% trusted_users$user_login)
+    ```
+
+    Do a small sanity check to make sure your filter actually worked...
+
+    ```{r}
+    # All observations...
+    nrow(obs)
+    
+    # Observations only by trusted users...
+    nrow(filtered_obs)
+    ```
+
+:::{.callout-important}
+Use `filtered_obs` to pull any pertinent information you want for downstream analyses. 
+:::
+
+## Finding observations identified by trusted users...
+
+This is going to be the "same" query as what I did above with rinat, but since I want to know more about who identified them, I need to do an API request with `{httr2}`. See the full list of potential parameters in the [iNaturalist API v2 documentation](https://api.inaturalist.org/v2/docs/#/Observations/get_observations).
+
+```{r}
+# 1. Prepare the request
+req <- request("https://api.inaturalist.org/v2/observations") |>
+  req_url_query(
+    taxon_name = "Orconectes australis",
+    place_id = 19,
+    quality_grade = "research", # Only return research grade observations
+    # What fields should be returned?
+    fields = "all"
+  )
+
+# 2. Execute the request
+resp <- req_perform(req)
+data <- resp_body_json(resp, simplifyVector = TRUE)
+
+# 3. Prep results to use
+obs_api <- data$results
+```
+
+```{r}
+names(obs_api)
+```
+
+```{r}
+#| eval: false
+# Exploring where stuff is at. This isn't super important to an end user.
+class(obs_api$identifications)
+class(obs_api$identifications[[1]]$user$login)
+names(obs_api$identifications[[1]])
+
+obs_api$taxon$name
+obs_api$identifications[[1]]$taxon$name
+obs_api$identifications[[1]]$user$login
+```
+
+ 1. **Reshape identificaiton data**
+```{r}
+obs_tbl <- tibble(
+  obs_id = obs_api$id, # observationID (not identificationID)
+  identifications = obs_api$identifications
+) %>%
+  mutate(
+    # Get all user logins associated with an observation
+    logins = purrr::map(identifications, ~ .x$user$login)
+    ) %>%
+  # Expand so each row = one user login per observation
+  unnest(logins) %>%
+  rename(user_login = logins)
+```
+
+**What this does:**
+* `obs_api$identifications` is a list where each element contains multiple IDs per observation.
+* `map()` extracts a complete vector of user logins that made IDs for an observation
+* `unnest()` converts the nested list structure into a flattened table
+  - i.e., One row per observation x ID-er
+* Result: a tidy table (`obs_tbl`) with columns:
+  - obs_id
+  - user_login
+
+2. **Identify observations with trusted users**
+
+```{r}
+trusted_identifications <- obs_tbl %>%
+  filter(user_login %in% trusted_users$user_login) %>%
+  distinct(obs_id) %>%
+  pull()
+
+message(paste("There are", length(trusted_identifications), "iNat observations identified by trusted users.", sep = " " ))
+```
+
+4. **Subset the original dataset...**
+
+```{r}
+trusted_observations <- obs_api %>%
+  filter(id %in% trusted_identifications)
+```
+
+```{r}
+# Sanity check -- this should = TRUE
+setequal(trusted_identifications, trusted_observations$id)
+```
+
+## Create a Map
+
+`{rinat}` includes a mapping function that returns a ggplot map object, but you may choose to create your own with other tools.
+
+```{r}
+map <- inat_map(filtered_obs, plot = FALSE)
+
+map + 
+  annotation_borders("state") + 
+  theme_classic()
+```
+
+That map sucks. It might depend on what your input is, but I'd like to make a better one...
+
+```{r}
+#| echo: true
+#| output: false
+library(sf)
+library(maps)
+```
+
+0.  **Define target state**
+
+    ```{r}
+    target_state <- "alabama"
+    ```
+
+    *This is done purely for the easy reuse of code.*
+
+1.  **Fetch target state boundary**
+
+    ```{r}
+    #| label: state-boundary
+    state_boundary <- st_as_sf(maps::map("state", 
+                                   regions = target_state, 
+                                   fill = TRUE, plot = FALSE)) |>
+                      st_set_crs(4326)
+    ```
+
+
+2.  **Convert inat data into an sf spatial object**
+
+    ```{r}
+    #| label: create-inat-sf
+    inat_sf <- st_as_sf(filtered_obs, coords = c("longitude", "latitude"), crs = 4326)
+    ```
+
+3.  **Filter points to only keep the ones inside the boundary**
+
+    ```{r}
+    state_filtered_obs <- st_intersection(inat_sf, state_boundary)
+    
+    # Optional sanity check
+    nrow(state_filtered_obs)
+    nrow(filtered_obs)
+    ```
+
+4.  **Plot it!**
+
+    ```{r}
+    ggplot() +
+      geom_sf(data = state_boundary, fill = "gray95", color = "black") +
+      geom_sf(data = state_filtered_obs, color = "forestgreen", alpha = 0.8) + 
+      theme_void()
+    ```
+
+### Add counties {#add-counties}
+
+1.  Fetch county boundaries, filtered by target state
+
+    ```{r}
+    #| warning: false
+    counties <- st_as_sf(maps::map("county", fill = TRUE, plot = FALSE)) %>%
+      filter(grepl(target_state, ID)) |>
+      st_set_crs(4326)
+    ```
+
+    :::{.callout-note}
+    We already have the state boundary from [above](@state-boundary), so there's no need to generate it again.
+    :::
+    
+2.  Plot it!
+
+    ```{r}
+    ggplot() +
+      # Layer 1: County polygons with light borders
+      geom_sf(data = counties, fill = "gray98", color = "gray80", size = 0.3) +
+      
+      # Layer 2: State outline (thick)
+      geom_sf(data = state_boundary, fill = NA, color = "black", size = 0.8) +
+      
+      # Layer 3: Occurrence points 
+      geom_sf(data = state_filtered_obs, color = "forestgreen", alpha = 0.5, size = 1.5) + 
+      
+      # Clean up background
+      theme_void()
+    ```
+
+## Dealing with Uncertainty
+
+You should be aware that the coordinates of iNat observations may be obscured. This can be determined on a by-record basis from the `coordinates_obscured` field which reflects the user's flagging (i.e., `geoprivacy`) and the iNat system designation (i.e., `taxon_geoprivacy`).
+
+The "uncertainty" is recorded in `positional_accuracy` and `public_positional_accuracy`. 
+
+::: {.callout-important}
+To get the accurate coordinates, you would need to have the API return `private_latitude` and `private_longitude`. This requires establishing authentication AND being an authorized user (e.g., the observer, a "trusted user" of the observer's account, a project curator).
+
+`**{rinat}**` does *not* support authentication.
+:::
+
+### Getting Accurate Coordinates
+
+As mentioned before, you need to be an authorized user (e.g., the observer, a "trusted user" of the observer's account, a project curator).
+
+
+#### Generate iNaturalist API Token {#generate-inat-token}
+
+::: {.callout-note}
+The steps detailed here generate a temporary (24-hour) token. I can work on an automation for it, but it requires the "app" to be registered with iNaturalist first. It won't be much of a hassle to do that, but it'll a little more time to pull the info for the application together.
+:::
+
+Go to [inaturalist.org/users/api_token](https://www.inaturalist.org/users/api_token). Then copy the complete string starting with `ey...` to your clipboard.
+
+To avoid hardcoding the token directly in a script where it could be accidentally shared, you should save it as an environment variable. Open your user environment file...
+
+```{r}
+#| label: edit-r-environment
+#| eval: false
+if (!require("usethis")) install.packages("usethis")
+
+usethis::edit_r_environ()
+```
+
+A text file called `.Renviron` will open in the editor (assuming you're using RStudio or another IDE). Add your token on a new line like this...
+
+`INAT_TOKEN="paste_your_copied_token_here"`
+
+Restart the R session for the changes to take effect.
+
+```{r}
+#| label: restart-r
+#| eval: false
+rstudioapi::restartSession()
+```
+
+::: {.callout-warning}
+If you use Git/ GitHub, make sure your `.gitignore` file includes `.Renviron` so your token never leaves your computa!
+:::
+
+#### Fetch Obscured Data with `httr2` {#fetch-private-httr2}
+
+Once your token is generated (see [Generate iNaturalist API Token](#generate-inat-token)), you can use use `Sys.getenv()` to query with the token securely within a script. 
+
+See [iNaturalist v2 API](https://api.inaturalist.org/v2/docs/)
+
+```{r}
+library(httr2)
+library(jsonlite)
+
+# 1. Load token from .Renvir
+my_jwt <- Sys.getenv("INAT_TOKEN")
+
+# 2. Construct request targeting iNat v2 API
+# -- Note: v2 requires you explicitly state what fields to return
+req <- request("https://api.inaturalist.org/v2/observations") |>
+  req_url_query(
+    user_id = "emmerson_cray",
+    geoprivacy = "obscured",
+    fields = "all"
+  ) |>
+  # Pass the token as a Bearer string in the Authorization header
+  req_headers(Authorization = my_jwt)
+
+# 3. Execute the request
+resp <- req_perform(req)
+data <- resp_body_json(resp, simplifyVector = TRUE)
+
+# 4. View results with real, hidden spatial locations intact
+my_obs_df <- data$results
+```
+
+:::{.callout-note}
+You can specify `fields = "all"` to return every single option, or be selective in the ones you want (e.g., `fields = "species_guess,observed_on,location,private_location,..."`)
+:::
+
+Here are all the fields the call above will return:
+
+```{r}
+#| echo: true
+names(my_obs_df)
+```
+
+If you aren't being returned private fields, it's probably because your token is invalid. See [Troubleshoot Your Token](#troubleshoot-token) for help.
+
+#### Fetch *Specific* Obscured Data with httr2
+
+Since I won't have "trusted" access to the obscured coordinates from `filtered_obs`, I'll send an **unauthenticated** request to retrieve the observations by my user `emmerson_cray`...
+
+```{r}
+req_unauthenticated <- request("https://api.inaturalist.org/v2/observations") |>
+  req_url_query(
+    user_id = "emmerson_cray",
+    fields = "all"
+  )
+
+resp_unauthenticated <- req_perform(req_unauthenticated)
+data_unauthenticated <- resp_body_json(resp_unauthenticated, simplifyVector = TRUE)
+
+my_obs_unauthenticated <- data_unauthenticated$results
+```
+
+And to compare the difference, I'll send an **authenticated** request to retrieve the observation by my user `emmerson_cray`...
+
+```{r}
+my_jwt <- Sys.getenv("INAT_TOKEN")
+
+req_authenticated <- request("https://api.inaturalist.org/v2/observations") |>
+  req_url_query(
+    user_id = "emmerson_cray",
+    fields = "all"
+  ) |>
+  req_headers(Authorization = my_jwt)
+
+resp_authenticated <- req_perform(req_authenticated)
+data_authenticated <- resp_body_json(resp_authenticated, simplifyVector = TRUE)
+
+my_obs_authenticated <- data_authenticated$results
+```
+
+
+The API silently removes the columns that require some sort of authentication. We can tell by seeing the difference in the data frames...
+
+```{r}
+# Unauthenticated
+ncol(my_obs_unauthenticated)
+
+# Authenticated
+ncol(my_obs_authenticated)
+```
+
+The exact columns that require authentication *(for this type of request)* are...
+
+```{r}
+library(janitor)
+compare_df_cols(my_obs_unauthenticated, my_obs_authenticated) %>%
+  filter(is.na(my_obs_unauthenticated)) |>
+  select(column_name) |>
+  gt()
+```
+
+Now that is explained, you can use this info to search for your target IDs of interest. 
+
+1.  **Gather target IDs and combine into a single comma separated string**
+
+    ```{r}
+    # Extract the observation IDs from unauthenticated retrieval
+    target_ids <- my_obs_unauthenticated %>%
+      filter(geoprivacy == "obscured") %>%
+      pull(id)
+    
+    # Combine into a single string
+    id_string <- paste(target_ids, collapse = ",")
+    ```
+
+2.  **Query IDs using httr2**
+```{r}
+library(httr2)
+library(jsonlite)
+
+# 1. Load token from .Renvir
+my_jwt <- Sys.getenv("INAT_TOKEN")
+
+# 2. Construct request targeting iNat v2 API with target IDs
+# -- Note: v2 requires you explicitly state what fields to return
+req_target <- request("https://api.inaturalist.org/v2/observations") |>
+  req_url_query(
+    id = id_string,
+    fields = "all"
+  ) |>
+  # Pass the token as a Bearer string in the Authorization header
+  req_headers(Authorization = my_jwt)
+
+# 3. Execute the request
+resp_target <- req_perform(req_target)
+data_target <- resp_body_json(resp_target, simplifyVector = TRUE)
+
+# 4. View results with real, hidden spatial locations intact
+target_obs <- data_target$results
+```
+
+```{r}
+# Sanity check (should match ncol for authenticated)
+ncol(target_obs) == ncol(my_obs_authenticated)
+```
+
+```{r}
+target_obs %>%
+  select(geoprivacy, location, private_location)
+```
+
+Then, if you wanted to parse these into lat/ long, you can do this easily by...
+```{r}
+target_obs %>%
+  select(geoprivacy, location, private_location) %>%
+  # Separate 'location'
+  separate_wider_delim(
+    cols = location,
+    delim = ",",
+    names = c("latitude", "longitude")
+  ) %>%
+    separate_wider_delim(
+    cols = private_location,
+    delim = ",",
+    names = c("private_latitude", "private_longitude")
+  )
+```
+
+#### Troubleshoot Your Token {#troubleshoot-token}
+
+Is the authentication being used in the API request? 
+```{r}
+resp_headers(resp)[["X-User-Id"]]
+resp$headers$`X-Cache`
+```
+
+If `X-User-Id` comes back as `NULL` and `X-Cache` is `"Miss"`, the API processed the request as a anonymous, unauthenticated public user. The API will silently filter out private fields without giving you an error.
+
+```{r}
+# Split the JWT to look at its payload
+token_parts <- strsplit(Sys.getenv("INAT_TOKEN"), "\\.")[[1]]
+
+if (length(token_parts) == 3) {
+  # Decode the middle payload piece
+  raw_payload <- rawToChar(jsonlite::base64_dec(token_parts[2]))
+  payload <- jsonlite::fromJSON(raw_payload)
+  
+  # Print the expiration status
+  expiration_time <- as.POSIXct(payload$exp, origin="1970-01-01", tz="UTC")
+  print(paste("Token User ID:", payload$user_id))
+  print(paste("Token expires at (UTC):", expiration_time))
+  print(paste("Is token expired?", expiration_time < Sys.time()))
+} else {
+  print("The INAT_TOKEN string is not a valid JWT format.")
+}
+
+```
+
+### Chloropleth Map 
+
+For this example, I'll extend what we've already got from when we [added counties](#add-counties), but this could be any case where you've got polygons.
+
+1.  Count points inside each county polygon
+
+    ```{r}
+    counts <- st_join(counties, inat_sf) %>%
+      group_by(ID) %>%
+      summarize(num_points = sum(!is.na(id)))
+    ```
+
+    ::: {.callout-note}
+    This uses [`inat_sf`](@create-inat-sf), not any filtered version. 
+    :::
+
+2.  Plot counties shaded by data density
+
+    ```{r}
+    ggplot(data = counts) + 
+      geom_sf(aes(fill = num_points), color = "gray50") +
+      scale_fill_viridis_c(option = "cividis", name = "Observations") + 
+      theme_void()
+    ```
+
+### Bonus! Thinking of accessibility...
+
+While `scale_fill_viridis_c(option = "cividis")` is arguable the safest choice for color accessibility, there is a neat R package, `{scico}` that uses the [Crameri scientific color maps](https://www.fabiocrameri.ch/colourmaps/) that are colorblind-safe.
+
+```{r}
+#| eval: true
+#| echo: true
+# install.packages("scico")
+library(scico)
+```
+
+`{scico}` has a lot of color palettes. YOu can see them all on the [Color Maps website](https://www.fabiocrameri.ch/colourmaps/) or call `{r} scico_palette_show()`
+
+```{r}
+#| label: scico-base
+#| include: true
+#| echo: true
+base_plot <- ggplot(data = counts) + 
+  geom_sf(aes(fill = num_points), color = "gray50") +
+  theme_void() +
+  theme(
+    plot.title = element_text(
+      size = 18,
+      face = "bold",
+      hjust = 0.5,
+      vjust = 0.5
+    )
+  )
+```
+
+```{r}
+#| label: scico-batlow
+#| fig-cap: "batlow"
+#| echo: true
+p_batlow <- base_plot + 
+  scale_fill_scico(palette = "batlow", name = "Observations") +
+  ggtitle("batlow")
+```
+
+You may also choose to reverse the palette by using `direction`. For a lot of scico palettes, this will make it go from light to dark.
+
+```{r}
+#| label: scico-batlow-reversed
+#| echo: true
+p_batlow_reversed <- base_plot + 
+  scale_fill_scico(palette = "batlow", direction = -1, , name = "Observations") +
+  ggtitle("batlow (reversed)")
+```
+
+If you want to start from light and densities don't go below 0, you can still use a sequential scale with a little finesse. 
+
+1.  Extract a smooth sequential gradient and place "white" at the start (0).
+
+    ```{r}
+    my_palette <- c("white", scico(10, palette = "batlow", direction = -1))
+    ```
+
+2.  Use `scale_fill_gradientn()` 
+
+    ```{r}
+    #| label: scico-my-palette
+    #| echo: true
+    p_my_palette <- base_plot +
+      scale_fill_gradientn(colors = my_palette, name = "Observations") +
+      ggtitle("my_palette")
+    ```
+
+```{r}
+#| label: scico-plots
+#| echo: false
+library(patchwork)
+
+p_batlow + p_batlow_reversed + p_my_palette &
+  # Force color bar to be horizontal
+  guides(fill = guide_colorbar(direction = "horizontal", title.position = "top")) &
+  theme(
+    # panel.background = element_rect(color = "black", linewidth = 1, fill = NA),
+    plot.margin = margin(15, 15, 15, 15),
+    legend.position = "inside",
+    legend.position.inside = c(0.7, 0.1)
+  )
+```
+
+## Packages Used
+
+```{r}
+#| echo: false
+#| message: false
+if(!require("grateful")) install.packages("grateful"); library(grateful)
+scan_packages("inat_trusting-observations.qmd", cite.tidyverse = FALSE) |>
+  gt() |>
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_column_labels()
+  )
+```
+
