@@ -7,6 +7,8 @@
 #'
 #' @return Integer taxonKey used for GBIF queries.
 #' @export
+#' 
+#' @importFrom rgbif name_backbone
 #'
 #' @examples
 #' get_taxon_key("Cambaridae")
@@ -31,6 +33,8 @@ get_taxon_key <- function(taxon_name) {
 #' @return A GBIF occurrence object from rgbif::occ_search().
 #' @export
 #'
+#' @importFrom rgbif occ_search
+#' 
 #' @examples
 #' \dontrun{
 #' get_gbif_occurrences(taxon_key = 123, state_gadm = "USA.1_1")
@@ -39,16 +43,14 @@ get_gbif_occurrences <- function(taxon_key,
                                  state_gadm = NULL,
                                  collection_code = NULL,
                                  publishing_org = NULL,
-                                 basis = "PRESERVED_SPECIMEN",
-                                 limit = 2000) {
+                                 basis = "PRESERVED_SPECIMEN") {
   
   rgbif::occ_search(
     taxonKey = taxon_key,
     gadmGid = state_gadm,
     collectionCode = collection_code,
     publishingOrg = publishing_org,
-    basisOfRecord = basis,
-    limit = limit
+    basisOfRecord = basis
   )
 }
 
@@ -64,4 +66,33 @@ get_gbif_occurrences <- function(taxon_key,
 #' @export
 extract_occurrence_data <- function(gbif_obj) {
   gbif_obj$data
+}
+
+
+#' Filter Results by a Taxonomic Level
+#' 
+#' Filters the output from extract_occurrence_data() to keep records that match 
+#' desired search term at a given taxonomic level.
+#' 
+#' @param df Output from extract_occurrence_data().
+#' @param tax_level Character. Must be taxonomic level provided by GBIF output. (e.g., "kingdom", "phylum", "order", "family", "genus", "species", "genericName", "specificEpithet")
+#' @param search_name Character. Name to filter by.
+#' 
+#' #' @examples
+#' \dontrun{
+#' filter_by_level(df, tax_level = "genus", search_name = "Lacunicambarus")
+#' 
+#' # You can also define your parameters ahead of the call...
+#' tax_level <- "genus"
+#' search_name <- "Lacunicambarus"
+#' 
+#' filter_by_level(df, tax_level, search_name)
+#' }
+#' 
+#' @return A tibble of filtered occurrence records.
+#' @export
+#' 
+filter_by_level <- function(df, tax_level, search_name) { 
+  df %>%
+    filter(.data[[tax_level]] == search_name)
 }

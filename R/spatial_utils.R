@@ -32,3 +32,29 @@ get_state_boundary <- function(state_name) {
     sf::st_as_sf() |>
     sf::st_set_crs(4326)
 }
+
+
+#' Clip Point Coordinates to a Boundary 
+#' 
+#' @param input_sf
+#' @param bounding_sf
+#' 
+#' @return An sf polygon object.
+#' 
+#' @export
+
+clip_to_boundary <- function(input_sf, bounding_sf) {
+  if (sf::st_crs(input_sf)[[1]] == sf::st_crs(bounding_sf)[[1]]) {
+  sf::st_intersection(input_sf, bounding_sf)
+} else
+  message("CRS of 'bounding_sf' has been transformed to match 'input_sf'.")
+  input_sf |>
+    sf::st_transform(sf::st_crs(bounding_sf)) |>
+    sf::st_intersection(bounding_sf)
+}
+
+#' Find HUC Layers
+#' 
+get_huc8 <- function(aoi) {
+  nhdplusTools::get_huc(AOI = aoi, type = "huc08")
+}
