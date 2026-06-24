@@ -1,0 +1,253 @@
+---
+title: "GBIF Crayfish Data Workflow"
+format: html
+editor: visual
+execute:
+  echo: true
+  warning: false
+---
+
+## Overview
+
+This workflow demonstrates how to:
+
+- [Retrieve specimen occurrence data from GBIF](#sec-gbif)
+- Filter records to a focal taxon
+- Convert tabular data into spatial objects
+- Generate both interactive and static maps
+
+This example uses crayfish (Family: Cambaridae) in Alabama.
+
+## Load Packages & Import Functions
+```{r}
+#| warning: false
+
+# Packages
+if (!require("pacman")) install.packages("pacman"); library(pacman)
+p_load(dplyr, sf, ggplot2, leaflet, ggplot2,
+       install = TRUE, update = FALSE)
+
+# Functions
+source("R/gbif_utils.R")
+source("R/spatial_utils.R")
+source("R/viz_utils.R")
+source("R/gadm_utils.R")
+```
+
+## Retrieve GBIF Data {#sec-gbif}
+
+::: {.callout-note}
+GBIF records could include:
+
+* Missing coordinates — *these records will not be captured in this workflow*
+* Synonyms vs accepted names
+* Multiple identifications per occurrence*
+
+:::
+
+1. Define what you'll be searching for.
+
+In this case, I want to search for all of our crayfish here in the family Cambaridae.
+
+```{r}
+taxon_key <- get_taxon_key("Cambaridae")
+```
+
+2. Define the geographic area.
+
+I want to find everything in Alabama, so I can use the function `lookup_state_gadm()`. This is better than providing a state name because not all data providers fill that information in, but the gadm is assigned by GBIF as long as the record has point coordinates. 
+
+```{r}
+state_gadm <- lookup_state_gadm(state_name = "alabama")
+```
+
+```{r}
+gbif_raw <- get_gbif_occurrences(
+  taxon_key = taxon_key,
+  state_gadm = state_gadm,
+  collection_code = "Invertebrates",
+  publishing_org = "34cc6c50-812c-11de-86fe-b8a03c50a862"
+)
+```
+
+```{r}
+occ_df <- extract_occurrence_data(gbif_raw)
+```
+
+## Explore & Filter Taxa
+
+```{r}
+sort(unique(occ_df$acceptedScientificName))
+```
+
+This helps verify the taxonomic composition of returned records.
+
+```{r}
+focal_df <- filter_by_level(occ_df, tax_level = "genus", search_name = "Lacunicambarus")
+```
+
+## Convert to Spatial Data
+
+```{r}
+state_sf <- get_state_boundary("alabama")
+
+points_sf <- to_sf_points(focal_df)
+
+points_clipped <- clip_to_boundary(input_sf = points_sf, bounding_sf = state_sf)
+```
+
+### Static Map
+```{r}
+plot_occurrences_map(state_sf, points_clipped)
+```
+
+### Interactive Map
+```{r}
+leaflet_map <- make_leaflet_map(focal_df)
+
+leaflet_map
+```
+
+You may choose to save the output...
+
+```{r}
+#| eval: false
+htmlwidgets::saveWidget(leaflet_map, "crayfish_map.html")
+```
+
+### Additional Layers 
+
+#### County
+
+```{r}
+counties <- st_as_sf(maps::map("county", 'alabama', fill = TRUE, plot = FALSE)) |>
+  st_set_crs(4326)
+```
+
+
+#### HUC-Levels
+
+```{r}
+library(nhdplusTools)
+
+# Query and download HUC8 watersheds overlapping Alabama's bounding box
+huc8 <- get_huc(AOI = state_sf$geom, type = "huc08") # Fetches HUC8s within the AOI
+
+# Ensure the coordinate reference systems (CRS) match for clipping
+huc8 <- st_transform(huc8, st_crs(state_sf))
+
+# Optional: Intersect/clip the watersheds strictly to the state border
+# -- Remove this step if you want to keep the full watersheds extending past state lines
+huc8_clipped <- st_intersection(huc8, state_sf)
+
+# Optional: Extract HUC6 and create grouped colors
+# -- 'id' should contiain the 8-digit string...
+library(dplyr)
+library(scico)
+
+huc8_clipped_styled <- huc8_clipped |>
+  mutate(
+    huc6 = substr(id, 1, 6) # Extract first 6 digits to get parent HUC6
+  ) |>
+  arrange(huc6, id) # Group sequentially for color palette
+
+# -- Pull HUC6 metadata
+huc6_metadata <- get_huc(AOI = state_sf, type = "huc06") |>
+  st_drop_geometry() |>
+  select(huc6 = id, huc6_name = name)
+
+# -- Join to HUC8 layer
+huc8_clipped_styled <- huc8_clipped |>
+  mutate(huc6 = substr(id, 1, 6)) |>
+  left_join(huc6_metadata, by = "huc6") |> # Append text names
+  mutate(legend_label = paste0(huc6, " - ", huc6_name)) |>
+  arrange(huc6) # Keeps colors sorted sequentially
+
+# -- Combine HUC8 geoms into HUC6 for a border at HUC6 level...
+huc_6_boundaries <- huc8_clipped_styled |>
+  group_by(legend_label) |>
+  summarize(geometry = st_union(geometry), .groups = "drop")
+```
+
+
+### Final Map (Interactive)
+```{r}
+# Format for popup hyperlinks to GBIF record
+focal_df$popup_links <- lapply(1:nrow(focal_df), function(i) {
+  # Combine the base URL with the specific occurrence key
+  full_url <- paste0("https://www.gbif.org/occurrence/", focal_df$key[i])
+  
+  HTML(sprintf(
+    "<b>Species:</b> <i>%s</i><br>
+      <b>Cat. Number:</b> %s <br>
+      <b>Location:</b> %s <br>
+      <br>
+     <a href='%s' target='_blank' rel='noopener noreferrer'>View on GBIF &rarr;</a>",
+
+    if (is.na(focal_df$species[i])) {focal_df$genus[i]} else {focal_df$species[i]},
+    htmlEscape(paste(focal_df$institutionCode[i], focal_df$collectionCode[i], focal_df$catalogNumber[i], sep = ":")),
+    focal_df$locality[i],
+    full_url
+  ))
+})
+
+#leaflet_map %>%
+
+leaflet_map <-  leaflet(focal_df) |>
+    leaflet::addProviderTiles(leaflet::providers$Esri.NatGeoWorldMap) |>
+    leaflet::addMarkers(
+      lng = ~decimalLongitude,
+      lat = ~decimalLatitude,
+      group = "Points",
+      popup = ~popup_links,
+      clusterOptions = leaflet::markerClusterOptions()
+    ) %>%
+  addPolygons(data = state_sf,
+              group = "State Boundary",
+              color = "black",
+              weight = 5,
+              opacity = 1) %>%
+  addPolygons(data = counties, 
+              group = "Counties",
+              fillColor = NA,
+              color = "black",
+              highlightOptions = highlightOptions(
+                color = "white",
+                fillColor = "grey",
+                fillOpacity = 0.2,
+                weight = 5
+              )) %>%
+  addPolygons(data = huc8_clipped_styled, 
+              group = "HUC8",
+              fillColor = NA,
+              color = "blue",
+              highlightOptions = highlightOptions(
+                color = "grey20",
+                fillOpacity = 0.2,
+                fillColor = "blue",
+                weight = 5
+              )
+              ) %>%
+  addPolygons(data = huc_6_boundaries, 
+              group = "HUC6", 
+              fillColor = scico(nrow(huc_6_boundaries), palette = "batlowK"), 
+              fillOpacity = 0.8, 
+              stroke = FALSE,
+              highlightOptions = highlightOptions(
+                color = "grey20",
+                fillOpacity = 0.2,
+                weight = 5
+              )) %>%
+  # Layer Control
+    addLayersControl(
+    overlayGroups = c("Counties", "HUC8", "HUC6", "Points"),
+    options = layersControlOptions(
+      collapsed = TRUE
+      )
+  ) %>%
+  # Which layers should be hidden
+  hideGroup(c("Counties", "HUC8"))
+
+leaflet_map
+```
+
