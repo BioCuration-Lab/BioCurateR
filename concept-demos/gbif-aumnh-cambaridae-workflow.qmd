@@ -171,7 +171,12 @@ huc_6_boundaries <- huc8_clipped_styled |>
 
 
 ### Final Map (Interactive)
+
+[More information about the R package {leaflet}](https://rstudio.github.io/leaflet/)
+
+
 ```{r}
+library(htmltools)
 # Format for popup hyperlinks to GBIF record
 focal_df$popup_links <- lapply(1:nrow(focal_df), function(i) {
   # Combine the base URL with the specific occurrence key
@@ -181,73 +186,219 @@ focal_df$popup_links <- lapply(1:nrow(focal_df), function(i) {
     "<b>Species:</b> <i>%s</i><br>
       <b>Cat. Number:</b> %s <br>
       <b>Location:</b> %s <br>
+      <b>Date:</b> %s <br>
       <br>
      <a href='%s' target='_blank' rel='noopener noreferrer'>View on GBIF &rarr;</a>",
 
     if (is.na(focal_df$species[i])) {focal_df$genus[i]} else {focal_df$species[i]},
     htmlEscape(paste(focal_df$institutionCode[i], focal_df$collectionCode[i], focal_df$catalogNumber[i], sep = ":")),
     focal_df$locality[i],
+    focal_df$eventDate[i],
     full_url
   ))
 })
 
-#leaflet_map %>%
+```
 
+Since there's not a field that gives the full taxon without the authority, create a "clean" species label to group consistently.
+
+```{r}
+focal_df$taxon_label <- ifelse(
+  is.na(focal_df$species),
+  focal_df$genus,
+  focal_df$species
+)
+```
+
+Split the data by `taxon_label`. This is important if you want to color the markers differently.
+
+```{r}
+species_list <- split(focal_df, focal_df$taxon_label)
+```
+
+
+You may choose to have the data represented by icons, which you can customize. When you use `makeAwesomeIcon()`, the `markerColor` is restricted to certain named values.
+
+```{r}
+#| label: make-icon
+awesome <- makeAwesomeIcon(
+  icon = "info",
+  library = "fa",
+  markerColor = "black", # Color of background pin
+  # markerColor = pal(focal_df$scientificName),
+  iconColor = pal(focal_df$scientificName)
+  # iconColor = "black" # Color of the icon itself
+)
+```
+
+In this, I'm using `addCircleMarker()`. It allows for easier color manipulation, if that's wanted.
+
+```{r}
+# How many colors are needed? 
+length(unique(focal_df$scientificName))
+
+library(ggokabeito)
+
+pal <- colorFactor(
+  # palette = scico(5, palette = "bilbao"),
+  palette = palette_okabe_ito(order = 2:7),
+  domain = focal_df$taxon_label
+)
+
+# For including colors in the legend.
+legend_colors <- pal(names(species_list))
+
+# Species labels...
+species_labels <- sprintf(
+  "<span style = 'color:%s;'>■</span> <i>%s</i>",
+  pal(names(species_list)),
+  names(species_list)
+)
+```
+
+
+
+::: {.callout-note}
+The icons available, at least for `library = "fa"`, come from an old fontawesome version. It seems like the full list of options can be found on the [Font Awesome 4.7.0 Cheatsheet](https://fontawesome.com/v4/cheatsheet/).
+:::
+
+
+```{r}
+#leaflet_map %>%
+library(leaflet.extras)
+
+  ## --- Build Base Map --- ##
 leaflet_map <-  leaflet(focal_df) |>
-    leaflet::addProviderTiles(leaflet::providers$Esri.NatGeoWorldMap) |>
-    leaflet::addMarkers(
-      lng = ~decimalLongitude,
-      lat = ~decimalLatitude,
-      group = "Points",
-      popup = ~popup_links,
-      clusterOptions = leaflet::markerClusterOptions()
-    ) %>%
+  leaflet::addProviderTiles(leaflet::providers$Esri.NatGeoWorldMap, group = "NatGeo World (default") |>
+  leaflet::addTiles(group = "Open Streets Map")
+    # leaflet::addAwesomeMarkers(
+    #   lng = ~decimalLongitude,
+    #   lat = ~decimalLatitude,
+    #   group = "Points",
+    #   icon = awesome,
+    #   popup = ~popup_links,
+    #   clusterOptions = leaflet::markerClusterOptions(
+    #     maxClusterRadius = 50,
+    #   )
+    # ) %>%
+  
+## -- Define Panes -- ##
+leaflet_map <- leaflet_map %>%
+  addMapPane("polygons", zIndex = 400) |>
+  addMapPane("points", zIndex = 500)
+
+## --- Add Polygons --- ###
+leaflet_map <- leaflet_map |>
+  ## --- Add Overlay Polygons --- ##
   addPolygons(data = state_sf,
               group = "State Boundary",
               color = "black",
               weight = 5,
-              opacity = 1) %>%
+              opacity = 1
+              ) |>
   addPolygons(data = counties, 
               group = "Counties",
-              fillColor = NA,
+              options = pathOptions(pane = "polygons"),
+              fillColor = "transparent",
               color = "black",
+              label = ~unname(stringr::str_to_title(stringr::str_split_i(counties$ID, ",",2))),
               highlightOptions = highlightOptions(
                 color = "white",
                 fillColor = "grey",
                 fillOpacity = 0.2,
                 weight = 5
-              )) %>%
+              )) |>
   addPolygons(data = huc8_clipped_styled, 
               group = "HUC8",
-              fillColor = NA,
+              options = pathOptions(pane = "polygons"),
+              fillColor = "transparent",
               color = "blue",
+              label = ~name,
               highlightOptions = highlightOptions(
                 color = "grey20",
                 fillOpacity = 0.2,
                 fillColor = "blue",
                 weight = 5
-              )
-              ) %>%
+              )) |>
   addPolygons(data = huc_6_boundaries, 
-              group = "HUC6", 
-              fillColor = scico(nrow(huc_6_boundaries), palette = "batlowK"), 
+              group = "HUC6",
+              options = pathOptions(pane = "polygons"),
+              fillColor = unname(scico(nrow(huc_6_boundaries), palette = "batlowK")), 
               fillOpacity = 0.8, 
               stroke = FALSE,
+              label = ~unname(stringr::str_split_i(huc_6_boundaries$legend_label, "- ", 2)),
               highlightOptions = highlightOptions(
                 color = "grey20",
                 fillOpacity = 0.2,
                 weight = 5
-              )) %>%
-  # Layer Control
-    addLayersControl(
-    overlayGroups = c("Counties", "HUC8", "HUC6", "Points"),
-    options = layersControlOptions(
-      collapsed = TRUE
-      )
-  ) %>%
-  # Which layers should be hidden
-  hideGroup(c("Counties", "HUC8"))
+              ))
+  
+  ## ----- Add Occurrence Points ----- ##
+  for (i in names(species_list)) {
+  df <- species_list[[i]]
+  
+  leaflet_map <- leaflet_map |>
+    addCircleMarkers(
+      data = df,
+      lng = ~decimalLongitude,
+      lat = ~decimalLatitude,
+      group = i,
+      options = pathOptions(pane = "points"),
+      color = "white",
+      weight = 1.75,
+      opacity = 1, 
+      fillColor = ~unname(pal(i)),
+      fillOpacity = 1,
+      radius = 7,
+      popup = ~popup_links,
+      # clusterOptions = markerClusterOptions(
+      #   maxClusterRadius = 100,
+      #   spiderfyOnMaxZoom = TRUE,
+      #   zoomToBoundsOnClick = TRUE,
+      #   disableClusteringAtZoom = 14
+      # )
+    )
+}
 
+  ## --- Add Grouped & Collapsible Layer Control --- ##
+  leaflet_map <- leaflet_map |>
+  # Which layers should be hidden by default
+  hideGroup(c("Counties", "HUC8")) |>
+  addGroupedLayersControl(
+    baseGroups = c("NatGeo World (default)", "Open Streets Map"),
+    overlayGroups = list(
+      "Species" = setNames(names(species_list), species_labels),
+       "Boundaries" = c("Counties", "HUC8", "HUC6")
+    ),
+    position = "topright",
+    options = groupedLayersControlOptions(
+      collapsed = FALSE,
+      # groupsCollapsed = FALSE,
+      groupsCollapsable = FALSE,
+      sortGroups = TRUE,
+      exclusiveGroups = c("Boundaries")  # allows multiple selections
+    )
+  ) %>%
+      addControl("AUMNH Holdings Only", position = "bottomleft") 
+## -- Add Legend -- ##
+# leaflet_map %>%
+#     addLegend(
+#       position = "bottomright",
+#       colors = legend_colors,
+#       labels = sprintf("<i>%s</i>", names(species_list)),
+#       title = "Species",
+#       opacity = 1
+#     )
 leaflet_map
 ```
 
+[How to Save a Leaflet Map as a html widget in R](https://www.geeksforgeeks.org/r-language/how-to-save-a-leaflet-map-as-a-html-widget-in-r/)
+
+Also, the R package [{leaflegend}](https://leaflegend.delveds.com) looks very promising!
+
+```{r}
+library(htmlwidgets)
+saveWidget(leaflet_map, file = "concept-demos/saved-output/AUMNH_Cambaridae_Alabama.html", selfcontained = TRUE)
+```
+
+# 
