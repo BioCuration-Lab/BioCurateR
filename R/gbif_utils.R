@@ -43,14 +43,16 @@ get_gbif_occurrences <- function(taxon_key,
                                  state_gadm = NULL,
                                  collection_code = NULL,
                                  publishing_org = NULL,
-                                 basis = "PRESERVED_SPECIMEN") {
+                                 basis = "PRESERVED_SPECIMEN",
+                                 limit = 99999) {
   
   rgbif::occ_search(
     taxonKey = taxon_key,
     gadmGid = state_gadm,
     collectionCode = collection_code,
     publishingOrg = publishing_org,
-    basisOfRecord = basis
+    basisOfRecord = basis,
+    limit = limit
   )
 }
 
