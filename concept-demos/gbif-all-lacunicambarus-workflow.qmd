@@ -50,7 +50,7 @@ GBIF records could include:
 In this case, I want to search for all of our crayfish here in the family Cambaridae.
 
 ```{r}
-taxon_key <- get_taxon_key("Cambaridae")
+taxon_key <- get_taxon_key("Lacunicambarus")
 ```
 
 2.  Define the geographic area.
@@ -65,8 +65,8 @@ state_gadm <- lookup_state_gadm(state_name = "alabama")
 gbif_raw <- get_gbif_occurrences(
   taxon_key = taxon_key,
   state_gadm = state_gadm,
-  collection_code = "Invertebrates",
-  publishing_org = "34cc6c50-812c-11de-86fe-b8a03c50a862"
+  # collection_code = "Invertebrates",
+  # publishing_org = "34cc6c50-812c-11de-86fe-b8a03c50a862"
 )
 ```
 
@@ -114,7 +114,7 @@ You may choose to save the output...
 
 ```{r}
 #| eval: false
-htmlwidgets::saveWidget(leaflet_map, "crayfish_map.html")
+# htmlwidgets::saveWidget(leaflet_map, "crayfish_map.html")
 ```
 
 ### Additional Layers
@@ -215,20 +215,6 @@ Split the data by `taxon_label`. This is important if you want to color the mark
 species_list <- split(focal_df, focal_df$taxon_label)
 ```
 
-You may choose to have the data represented by icons, which you can customize. When you use `makeAwesomeIcon()`, the `markerColor` is restricted to certain named values.
-
-```{r}
-#| label: make-icon
-awesome <- makeAwesomeIcon(
-  icon = "info",
-  library = "fa",
-  markerColor = "black", # Color of background pin
-  # markerColor = pal(focal_df$scientificName),
-  iconColor = pal(focal_df$scientificName)
-  # iconColor = "black" # Color of the icon itself
-)
-```
-
 In this, I'm using `addCircleMarker()`. It allows for easier color manipulation, if that's wanted.
 
 ```{r}
@@ -236,10 +222,10 @@ In this, I'm using `addCircleMarker()`. It allows for easier color manipulation,
 length(unique(focal_df$scientificName))
 
 library(ggokabeito)
-
+library(impressionist.colors)
 pal <- colorFactor(
   # palette = scico(5, palette = "bilbao"),
-  palette = palette_okabe_ito(order = 2:7),
+  palette = impressionist.colors::get.color(8, 2, 1:16),
   domain = focal_df$taxon_label
 )
 
@@ -251,6 +237,20 @@ species_labels <- sprintf(
   "<span style = 'color:%s;'>■</span> <i>%s</i>",
   pal(names(species_list)),
   names(species_list)
+)
+```
+
+You may choose to have the data represented by icons, which you can customize. When you use `makeAwesomeIcon()`, the `markerColor` is restricted to certain named values.
+
+```{r}
+#| label: make-icon
+awesome <- makeAwesomeIcon(
+  icon = "info",
+  library = "fa",
+  markerColor = "black", # Color of background pin
+  # markerColor = pal(focal_df$scientificName),
+  iconColor = pal(focal_df$scientificName)
+  # iconColor = "black" # Color of the icon itself
 )
 ```
 
@@ -346,12 +346,19 @@ leaflet_map <- leaflet_map |>
       fillOpacity = 1,
       radius = 7,
       popup = ~popup_links,
-      # clusterOptions = markerClusterOptions(
-      #   maxClusterRadius = 100,
-      #   spiderfyOnMaxZoom = TRUE,
-      #   zoomToBoundsOnClick = TRUE,
-      #   disableClusteringAtZoom = 14
-      # )
+      clusterOptions = markerClusterOptions(
+        maxClusterRadius = 150,
+        spiderfyOnMaxZoom = FALSE,
+        zoomToBoundsOnClick = TRUE,
+        disableClusteringAtZoom = 7,
+        polygonOptions = list(
+          fillColor = "white",
+          color = "white",
+          weight = 3,
+          opacity = 0.8,
+          fillOpacity = 0.7
+        ) 
+      )
     )
 }
 
@@ -374,7 +381,7 @@ leaflet_map <- leaflet_map |>
       exclusiveGroups = c("Boundaries")  # allows multiple selections
     )
   ) %>%
-      addControl("AUMNH Holdings Only", position = "bottomleft") 
+      addControl("All GBIF Occurrences", position = "bottomleft") 
 ## -- Add Legend -- ##
 # leaflet_map %>%
 #     addLegend(
@@ -423,7 +430,6 @@ leaflet_map <- leaflet_map %>%
     popup = ~paste0("<b>",stringr::str_split_i(query, ",", 1),"</b>")
       )
 
-leaflet_map
 ```
 
 [How to Save a Leaflet Map as a html widget in R](https://www.geeksforgeeks.org/r-language/how-to-save-a-leaflet-map-as-a-html-widget-in-r/)
@@ -432,7 +438,7 @@ Also, the R package [{leaflegend}](https://leaflegend.delveds.com) looks very pr
 
 ```{r}
 library(htmlwidgets)
-saveWidget(leaflet_map, file = "concept-demos/saved-output/AUMNH_Cambaridae_Alabama.html", selfcontained = TRUE)
+saveWidget(leaflet_map, file = "concept-demos/saved-output/GBIF_Lacunicambarus_Alabama.html", selfcontained = TRUE)
 ```
 
 # 
