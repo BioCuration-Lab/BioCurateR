@@ -19,6 +19,11 @@ This workflow demonstrates how to:
 This example uses crayfish (Family: Cambaridae) in Alabama.
 
 ## Load Packages & Import Functions
+```{r}
+#| label: setup
+if(!require("here")) install.packages("here"); library(here)
+here::i_am(("concept-demos/gbif-aumnh-cambaridae-workflow.qmd"))
+```
 
 ```{r}
 #| warning: false
@@ -29,10 +34,10 @@ p_load(dplyr, sf, ggplot2, leaflet, ggplot2,
        install = TRUE, update = FALSE)
 
 # Functions
-source("R/gbif_utils.R")
-source("R/spatial_utils.R")
-source("R/viz_utils.R")
-source("R/gadm_utils.R")
+source(here("R/gbif_utils.R"))
+source(here("R/spatial_utils.R"))
+source(here("R/viz_utils.R"))
+source(here("R/gadm_utils.R"))
 ```
 
 ## Retrieve GBIF Data {#sec-gbif}
@@ -215,20 +220,6 @@ Split the data by `taxon_label`. This is important if you want to color the mark
 species_list <- split(focal_df, focal_df$taxon_label)
 ```
 
-You may choose to have the data represented by icons, which you can customize. When you use `makeAwesomeIcon()`, the `markerColor` is restricted to certain named values.
-
-```{r}
-#| label: make-icon
-awesome <- makeAwesomeIcon(
-  icon = "info",
-  library = "fa",
-  markerColor = "black", # Color of background pin
-  # markerColor = pal(focal_df$scientificName),
-  iconColor = pal(focal_df$scientificName)
-  # iconColor = "black" # Color of the icon itself
-)
-```
-
 In this, I'm using `addCircleMarker()`. It allows for easier color manipulation, if that's wanted.
 
 ```{r}
@@ -257,6 +248,22 @@ species_labels <- sprintf(
 ::: callout-note
 The icons available, at least for `library = "fa"`, come from an old fontawesome version. It seems like the full list of options can be found on the [Font Awesome 4.7.0 Cheatsheet](https://fontawesome.com/v4/cheatsheet/).
 :::
+
+You may choose to have the data represented by icons, which you can customize. When you use `makeAwesomeIcon()`, the `markerColor` is restricted to certain named values.
+
+```{r}
+#| label: make-icon
+#| eval: false
+#| include: true
+awesome <- makeAwesomeIcon(
+  icon = "info",
+  library = "fa",
+  markerColor = "black", # Color of background pin
+  # markerColor = pal(focal_df$scientificName),
+  iconColor = pal(focal_df$scientificName)
+  # iconColor = "black" # Color of the icon itself
+)
+```
 
 ```{r}
 #leaflet_map %>%
@@ -432,7 +439,6 @@ Also, the R package [{leaflegend}](https://leaflegend.delveds.com) looks very pr
 
 ```{r}
 library(htmlwidgets)
-saveWidget(leaflet_map, file = "concept-demos/saved-output/AUMNH_Cambaridae_Alabama.html", selfcontained = TRUE)
+saveWidget(leaflet_map, file = here("concept-demos/saved-output/AUMNH_Cambaridae_Alabama.html"), selfcontained = TRUE)
 ```
 
-# 
